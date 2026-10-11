@@ -7,29 +7,12 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
-    // Helper functions
-    function isSignedIn() {
-      return request.auth != null;
-    }
-
-    function isAdmin() {
-      return isSignedIn() && (request.auth.token.email == 'tanmaymore0220@gmail.com' || exists(/databases/$(database)/documents/admins/$(request.auth.uid)));
-    }
-
     function isValidId(id) {
       return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
     function incoming() {
       return request.resource.data;
-    }
-
-    function existing() {
-      return resource.data;
-    }
-
-    function isOwner(userId) {
-      return isSignedIn() && request.auth.uid == userId;
     }
 
     // Validation for Project
@@ -61,31 +44,17 @@ service cloud.firestore {
 
     // Projects collection
     match /projects/{projectId} {
-      allow get: if isValidId(projectId) && (isAdmin() || (isSignedIn() && existing().userId == request.auth.uid));
-      allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
-      allow create: if isValidId(projectId) && isSignedIn()
-        && incoming().userId == request.auth.uid
-        && isValidProject(incoming());
-      allow update: if isValidId(projectId) && isSignedIn()
-        && (isAdmin() || (existing().userId == request.auth.uid && incoming().userId == existing().userId))
-        && isValidProject(incoming());
-      allow delete: if isValidId(projectId) && isSignedIn()
-        && (isAdmin() || existing().userId == request.auth.uid);
+      allow read, get, list: if true;
+      allow create: if isValidId(projectId) && isValidProject(incoming());
+      allow update: if isValidId(projectId) && isValidProject(incoming());
+      allow delete: if isValidId(projectId);
 
       // Subcollection for recipients
       match /recipients/{recipientId} {
-        allow get: if isValidId(recipientId) && (isAdmin() || (isSignedIn() && existing().userId == request.auth.uid));
-        allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
-        allow create: if isValidId(recipientId) && isSignedIn()
-          && incoming().userId == request.auth.uid
-          && incoming().projectId == projectId
-          && isValidRecipient(incoming())
-          && get(/databases/$(database)/documents/projects/$(projectId)).data.userId == request.auth.uid;
-        allow update: if isValidId(recipientId) && isSignedIn()
-          && (isAdmin() || (existing().userId == request.auth.uid && incoming().userId == existing().userId))
-          && isValidRecipient(incoming());
-        allow delete: if isValidId(recipientId) && isSignedIn()
-          && (isAdmin() || existing().userId == request.auth.uid);
+        allow read, get, list: if true;
+        allow create: if isValidId(recipientId) && isValidRecipient(incoming());
+        allow update: if isValidId(recipientId) && isValidRecipient(incoming());
+        allow delete: if isValidId(recipientId);
       }
     }
   }

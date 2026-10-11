@@ -4,8 +4,6 @@ import {
   getDocs,
   setDoc,
   deleteDoc,
-  query,
-  where,
 } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from './firebase';
 import { CertificateProject } from '../types/certificate';
@@ -13,15 +11,14 @@ import { saveLocalTemplate, getLocalTemplate } from './storageHelper';
 
 const COLLECTION_NAME = 'projects';
 
-export async function fetchUserProjects(userId: string): Promise<CertificateProject[]> {
+export async function fetchUserProjects(_userId?: string): Promise<CertificateProject[]> {
   try {
-    const q = query(collection(db, COLLECTION_NAME), where('userId', '==', userId));
-    const querySnapshot = await getDocs(q);
+    const colRef = collection(db, COLLECTION_NAME);
+    const querySnapshot = await getDocs(colRef);
     const projects: CertificateProject[] = [];
 
     for (const docSnap of querySnapshot.docs) {
       const data = docSnap.data() as CertificateProject;
-      // Re-hydrate local template if dataUrl was stored locally
       if (data.template && !data.template.dataUrl) {
         const localDataUrl = await getLocalTemplate(docSnap.id);
         if (localDataUrl) {
@@ -31,7 +28,6 @@ export async function fetchUserProjects(userId: string): Promise<CertificateProj
       projects.push({ ...data, id: docSnap.id });
     }
 
-    // Sort descending by updatedAt / createdAt
     return projects.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
   } catch (error) {
     handleFirestoreError(error, OperationType.LIST, COLLECTION_NAME);
@@ -41,7 +37,6 @@ export async function fetchUserProjects(userId: string): Promise<CertificateProj
 export async function saveProject(project: CertificateProject): Promise<void> {
   const docPath = `${COLLECTION_NAME}/${project.id}`;
   try {
-    // If template has large dataUrl, persist in IndexedDB and omit heavy string from Firestore if > 400KB
     const projectToSave: CertificateProject = {
       ...project,
       updatedAt: new Date().toISOString(),
@@ -50,15 +45,13 @@ export async function saveProject(project: CertificateProject): Promise<void> {
     if (project.template?.dataUrl) {
       await saveLocalTemplate(project.id, project.template.dataUrl);
       if (project.template.dataUrl.length > 400000) {
-        // Keep metadata but store dataUrl locally to protect Firestore document size limit
         projectToSave.template = {
           ...project.template,
-          dataUrl: '', // retrieved from IndexedDB
+          dataUrl: '',
         };
       }
     }
 
-    // If recipients list is very large, store first 200 in project doc
     if (projectToSave.recipients && projectToSave.recipients.length > 200) {
       projectToSave.recipients = projectToSave.recipients.slice(0, 200);
     }
