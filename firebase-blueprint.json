@@ -1,0 +1,116 @@
+{
+  "entities": {
+    "Project": {
+      "title": "Project",
+      "description": "Certificate generation project with template config and metadata",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "UID of the project owner"
+        },
+        "userEmail": {
+          "type": "string",
+          "description": "Email of the project owner"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 150,
+          "description": "Name of the certificate project"
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "Optional notes or event details"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["draft", "ready", "processing", "completed", "failed"],
+          "description": "Lifecycle state of the project"
+        },
+        "template": {
+          "type": "object",
+          "description": "Certificate design template specifications and preview image"
+        },
+        "fields": {
+          "type": "array",
+          "description": "Visual dynamic text fields and position mappings"
+        },
+        "recipientCount": {
+          "type": "number",
+          "description": "Total recipients loaded"
+        },
+        "generatedCount": {
+          "type": "number",
+          "description": "Total certificates generated successfully"
+        },
+        "failedCount": {
+          "type": "number",
+          "description": "Total certificates that failed"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Creation timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Last updated timestamp"
+        }
+      },
+      "required": ["userId", "name", "status"]
+    },
+    "Recipient": {
+      "title": "Recipient",
+      "description": "Single recipient record belonging to a project",
+      "type": "object",
+      "properties": {
+        "projectId": {
+          "type": "string",
+          "description": "Parent project ID"
+        },
+        "userId": {
+          "type": "string",
+          "description": "Project owner UID"
+        },
+        "data": {
+          "type": "object",
+          "description": "Spreadsheet key-value record"
+        },
+        "isValid": {
+          "type": "boolean",
+          "description": "Validation flag"
+        },
+        "validationErrors": {
+          "type": "array",
+          "description": "List of validation errors if invalid"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "success", "failed"],
+          "description": "Generation status"
+        },
+        "generatedFileName": {
+          "type": "string",
+          "maxLength": 255,
+          "description": "Final PDF filename"
+        },
+        "errorMessage": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "Error details if failed"
+        }
+      },
+      "required": ["projectId", "userId", "status"]
+    }
+  },
+  "firestore": {
+    "/projects/{projectId}": {
+      "schema": "Project",
+      "description": "Top-level collection for user certificate projects"
+    },
+    "/projects/{projectId}/recipients/{recipientId}": {
+      "schema": "Recipient",
+      "description": "Subcollection containing recipient data records for a project"
+    }
+  }
+}

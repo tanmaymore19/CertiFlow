@@ -1,0 +1,6 @@
+{
+  "name": "CertiFlow – Smart Certificate Generator",
+  "description": "Smart bulk certificate generator to upload certificate templates, visually place dynamic fields, import recipient spreadsheets, and export personalized high-quality PDFs and ZIPs.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
