@@ -11,6 +11,8 @@ import {
   FileText,
   Layers,
   ArrowRight,
+  Mail,
+  Check,
 } from 'lucide-react';
 import {
   CertificateTemplate,
@@ -25,6 +27,7 @@ import {
 } from '../lib/pdfEngine';
 import { exportGenerationReportCsv } from '../lib/spreadsheet';
 import { saveGeneratedPdfBlob } from '../lib/storageHelper';
+import { EmailDistributionModal } from './EmailDistributionModal';
 
 interface BulkGeneratorProps {
   template: CertificateTemplate;
@@ -33,6 +36,7 @@ interface BulkGeneratorProps {
   projectName: string;
   projectId: string;
   onGenerationComplete: (generatedCount: number, failedCount: number) => void;
+  onUpdateRecipients?: (updatedRecipients: RecipientRecord[]) => void;
 }
 
 interface GeneratedItem {
@@ -49,9 +53,11 @@ export const BulkGenerator: React.FC<BulkGeneratorProps> = ({
   projectName,
   projectId,
   onGenerationComplete,
+  onUpdateRecipients,
 }) => {
   const [isGenerating, setIsGenerating] = useState(false);
   const [isZipping, setIsZipping] = useState(false);
+  const [isEmailModalOpen, setIsEmailModalOpen] = useState(false);
   const [progressPercent, setProgressPercent] = useState(0);
   const [currentRecipientLabel, setCurrentRecipientLabel] = useState('');
   const [generatedItems, setGeneratedItems] = useState<GeneratedItem[]>([]);
@@ -59,7 +65,9 @@ export const BulkGenerator: React.FC<BulkGeneratorProps> = ({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   const validRecipients = recipients.filter((r) => r.isValid);
+  const recipientsWithEmail = recipients.filter((r) => r.email && r.email.includes('@'));
 
+  // Memory-friendly batch generator using small yields to the event loop
   const startBulkGeneration = async (targetBatch = validRecipients) => {
     if (targetBatch.length === 0) return;
 
@@ -106,6 +114,9 @@ export const BulkGenerator: React.FC<BulkGeneratorProps> = ({
       }
 
       setProgressPercent(Math.round(((i + 1) / total) * 100));
+
+      // Yield execution to garbage collector after each certificate to prevent memory spikes
+      await new Promise((r) => setTimeout(r, 0));
     }
 
     setGeneratedItems(successfullyGenerated);
@@ -164,7 +175,6 @@ export const BulkGenerator: React.FC<BulkGeneratorProps> = ({
     }
   };
 
-  // Toggle select item
   const toggleSelect = (id: string) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
@@ -182,7 +192,6 @@ export const BulkGenerator: React.FC<BulkGeneratorProps> = ({
     }
   };
 
-  // Export CSV generation report
   const handleExportReport = () => {
     const reportRecipients: RecipientRecord[] = [
       ...generatedItems.map((g) => g.recipient),
@@ -199,14 +208,23 @@ export const BulkGenerator: React.FC<BulkGeneratorProps> = ({
           <div>
             <h4 className="text-base font-bold text-slate-900 flex items-center space-x-2">
               <Sparkles className="w-5 h-5 text-amber-500" />
-              <span>Bulk Certificate Generation Engine</span>
+              <span>Bulk Certificate Generation & Email Distribution</span>
             </h4>
             <p className="text-xs text-slate-500 mt-0.5">
-              Generate crisp vector PDF certificates for {validRecipients.length} valid recipient(s).
+              Generate crisp vector PDF certificates for {validRecipients.length} valid recipient(s) and dispatch via email.
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setIsEmailModalOpen(true)}
+              className="inline-flex items-center space-x-2 px-4 py-2.5 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-xs font-bold transition shadow-xs"
+            >
+              <Mail className="w-4 h-4 text-indigo-600" />
+              <span>Automated Email Dispatch ({recipientsWithEmail.length})</span>
+            </button>
+
             <button
               type="button"
               onClick={() => startBulkGeneration()}
@@ -258,15 +276,24 @@ export const BulkGenerator: React.FC<BulkGeneratorProps> = ({
               </div>
               <div>
                 <p className="text-xs font-bold text-emerald-900">
-                  {generatedItems.length} Certificate(s) Ready for Export!
+                  {generatedItems.length} Certificate(s) Ready for Export & Delivery!
                 </p>
                 <p className="text-[11px] text-emerald-700 mt-0.5">
-                  High-quality vector PDFs created with custom typography and design preservation.
+                  Vector PDFs rendered with 1:1 proportional typography and custom data.
                 </p>
               </div>
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setIsEmailModalOpen(true)}
+                className="inline-flex items-center space-x-1.5 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-xs transition"
+              >
+                <Mail className="w-3.5 h-3.5" />
+                <span>Send via Email</span>
+              </button>
+
               <button
                 type="button"
                 onClick={handleDownloadAllZip}
@@ -350,17 +377,16 @@ export const BulkGenerator: React.FC<BulkGeneratorProps> = ({
                   <th className="py-2.5 px-3 w-10"></th>
                   <th className="py-2.5 px-3 font-semibold text-slate-600">Filename</th>
                   <th className="py-2.5 px-3 font-semibold text-slate-600">Recipient Name</th>
-                  <th className="py-2.5 px-3 font-semibold text-slate-600">Certificate ID</th>
-                  <th className="py-2.5 px-3 font-semibold text-slate-600">Course / Event</th>
+                  <th className="py-2.5 px-3 font-semibold text-slate-600">Email</th>
+                  <th className="py-2.5 px-3 font-semibold text-slate-600">Delivery Status</th>
                   <th className="py-2.5 px-3 font-semibold text-slate-600 text-right pr-4">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {generatedItems.map((item, idx) => {
+                {generatedItems.map((item) => {
                   const isChecked = selectedIds.has(item.id);
                   const nameVal = item.recipient.data['Full Name'] || item.recipient.data['Name'] || '-';
-                  const idVal = item.recipient.data['Certificate ID'] || item.recipient.data['ID'] || '-';
-                  const courseVal = item.recipient.data['Course Name'] || item.recipient.data['Course'] || '-';
+                  const emailVal = item.recipient.email || '-';
 
                   return (
                     <tr key={item.id} className="hover:bg-slate-50/70 transition-colors">
@@ -379,8 +405,24 @@ export const BulkGenerator: React.FC<BulkGeneratorProps> = ({
                         </div>
                       </td>
                       <td className="py-2.5 px-3 font-medium text-slate-900">{nameVal}</td>
-                      <td className="py-2.5 px-3 font-mono text-slate-600">{idVal}</td>
-                      <td className="py-2.5 px-3 text-slate-600 truncate max-w-[200px]">{courseVal}</td>
+                      <td className="py-2.5 px-3 text-slate-600 font-mono text-[11px]">{emailVal}</td>
+                      <td className="py-2.5 px-3">
+                        {item.recipient.emailStatus === 'sent' ? (
+                          <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-100 text-emerald-800">
+                            <Check className="w-3 h-3" />
+                            <span>Emailed</span>
+                          </span>
+                        ) : item.recipient.emailStatus === 'failed' ? (
+                          <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-rose-100 text-rose-800">
+                            <AlertTriangle className="w-3 h-3" />
+                            <span>Failed</span>
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 text-slate-600">
+                            <span>Ready to Email</span>
+                          </span>
+                        )}
+                      </td>
                       <td className="py-2.5 px-3 text-right pr-4">
                         <button
                           type="button"
@@ -400,6 +442,19 @@ export const BulkGenerator: React.FC<BulkGeneratorProps> = ({
           </div>
         </div>
       )}
+
+      {/* Email Distribution Modal */}
+      <EmailDistributionModal
+        isOpen={isEmailModalOpen}
+        onClose={() => setIsEmailModalOpen(false)}
+        template={template}
+        fields={fields}
+        recipients={recipients}
+        projectName={projectName}
+        onUpdateRecipients={(updated) => {
+          if (onUpdateRecipients) onUpdateRecipients(updated);
+        }}
+      />
     </div>
   );
 };

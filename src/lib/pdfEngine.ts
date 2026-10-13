@@ -2,6 +2,13 @@ import { PDFDocument, rgb, StandardFonts, PDFFont } from 'pdf-lib';
 import JSZip from 'jszip';
 import { CertificateTemplate, FieldConfig, RecipientRecord } from '../types/certificate';
 
+/**
+ * Standard reference width used across Preview DOM, High-Res Canvas, and Vector PDF.
+ * At 1200px reference width, a 36pt font represents 36/1200 = 3% of certificate width.
+ * By using this reference in all render targets, font scaling is 100% mathematically identical.
+ */
+export const REFERENCE_BASE_WIDTH = 1200;
+
 // Helper to convert hex color (#1e293b) to RGB normalized 0..1
 function hexToRgb(hex: string): { r: number; g: number; b: number } {
   let clean = hex.replace('#', '');
@@ -43,7 +50,11 @@ export function rasterizeSvgToPngDataUrl(svgDataUrl: string, targetWidth = 1920,
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(0, 0, targetWidth, targetHeight);
       ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
-      resolve(canvas.toDataURL('image/png', 0.95));
+      const url = canvas.toDataURL('image/png', 0.95);
+      // Clean up canvas
+      canvas.width = 0;
+      canvas.height = 0;
+      resolve(url);
     };
     img.onerror = (e) => reject(new Error('Failed to load SVG template for rasterization: ' + e));
     img.src = svgDataUrl;
@@ -66,7 +77,7 @@ function extractBase64Bytes(dataUrl: string): { bytes: Uint8Array; isPng: boolea
 }
 
 // Format text according to transform rule
-function formatText(value: string, transform: 'none' | 'uppercase' | 'capitalize'): string {
+export function formatText(value: string, transform: 'none' | 'uppercase' | 'capitalize'): string {
   if (!value) return '';
   if (transform === 'uppercase') return value.toUpperCase();
   if (transform === 'capitalize') {
@@ -102,7 +113,8 @@ async function resolvePdfFont(
 }
 
 /**
- * Generate single certificate PDF with mathematically exact 1:1 proportional scaling.
+ * Generate single certificate PDF with exact 1:1 proportional scaling matching the DOM preview.
+ * Math: fontSizeInPdf = field.fontSize * (pageWidth / REFERENCE_BASE_WIDTH)
  */
 export async function generateSingleCertificatePdf(
   template: CertificateTemplate,
@@ -136,6 +148,11 @@ export async function generateSingleCertificatePdf(
   const pageWidth = page.getWidth();
   const pageHeight = page.getHeight();
 
+  // Dynamic Scale Multiplier:
+  // Base coordinate width is derived directly from the template's canonical width (matching DOM preview)
+  const baseWidth = template.width || pageWidth || REFERENCE_BASE_WIDTH;
+  const pdfScale = pageWidth / baseWidth;
+
   for (const field of fields) {
     let rawText = '';
     if (field.mappedColumn && recipientData[field.mappedColumn] !== undefined) {
@@ -149,16 +166,16 @@ export async function generateSingleCertificatePdf(
 
     const font = await resolvePdfFont(pdfDoc, field.fontFamily, field.isBold, field.isItalic);
     const boxX = (field.xPercent / 100) * pageWidth;
-    const boxYTop = (field.yPercent / 100) * pageHeight;
     const boxWidth = (field.widthPercent / 100) * pageWidth;
 
-    let fontSize = field.fontSize;
+    // Apply exact proportional font sizing
+    let fontSize = field.fontSize * pdfScale;
     let textWidth = font.widthOfTextAtSize(text, fontSize);
 
     // Dynamic shrink to fit if text exceeds container
     if (field.autoScale && textWidth > boxWidth && boxWidth > 10) {
       const scale = boxWidth / textWidth;
-      fontSize = Math.max(8, fontSize * scale);
+      fontSize = Math.max(8 * pdfScale, fontSize * scale);
       textWidth = font.widthOfTextAtSize(text, fontSize);
     }
 
@@ -169,8 +186,9 @@ export async function generateSingleCertificatePdf(
       drawX = boxX + boxWidth - textWidth;
     }
 
-    // PDF Y coordinates count from bottom-left
-    const drawY = pageHeight - boxYTop - fontSize;
+    // PDF Y coordinates count from bottom-left; center-align matches CSS -translate-y-1/2 exactly
+    const centerYFromBottom = pageHeight - ((field.yPercent / 100) * pageHeight);
+    const drawY = centerYFromBottom - (fontSize * 0.35);
     const { r, g, b } = hexToRgb(field.fontColor);
 
     page.drawText(text, {
@@ -187,7 +205,8 @@ export async function generateSingleCertificatePdf(
 }
 
 /**
- * Generate High-Resolution PNG Image of Certificate for 1:1 Canvas Export.
+ * Generate High-Resolution PNG Image of Certificate with exact 1:1 proportional scaling.
+ * Math: dynamic scale multiplier (exportWidth / baseWidth) applied to font size and coordinates.
  */
 export async function generateSingleCertificatePng(
   template: CertificateTemplate,
@@ -199,10 +218,14 @@ export async function generateSingleCertificatePng(
     const img = new Image();
     img.crossOrigin = 'anonymous';
     img.onload = () => {
+      const naturalWidth = img.naturalWidth || template.width || 1200;
+      const naturalHeight = img.naturalHeight || template.height || 850;
+      const exportWidth = targetWidth || naturalWidth;
+      const exportHeight = Math.round(exportWidth * (naturalHeight / naturalWidth));
+
       const canvas = document.createElement('canvas');
-      const targetHeight = Math.round(targetWidth * (img.naturalHeight / img.naturalWidth || 0.707));
-      canvas.width = targetWidth;
-      canvas.height = targetHeight;
+      canvas.width = exportWidth;
+      canvas.height = exportHeight;
       const ctx = canvas.getContext('2d');
       if (!ctx) {
         reject(new Error('Canvas context unavailable'));
@@ -210,12 +233,13 @@ export async function generateSingleCertificatePng(
       }
 
       ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, targetWidth, targetHeight);
-      ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
+      ctx.fillRect(0, 0, exportWidth, exportHeight);
+      ctx.drawImage(img, 0, 0, exportWidth, exportHeight);
 
-      // Scale factor relative to reference template width
-      const refWidth = template.width || 1200;
-      const scale = targetWidth / refWidth;
+      // Base coordinate width matching the editor preview
+      const baseWidth = template.width || REFERENCE_BASE_WIDTH;
+      // Dynamic scaling multiplier (exportWidth / baseWidth)
+      const canvasScale = exportWidth / baseWidth;
 
       fields.forEach((field) => {
         let rawText = '';
@@ -228,11 +252,12 @@ export async function generateSingleCertificatePng(
         const text = formatText(rawText, field.textTransform);
         if (!text) return;
 
-        const boxX = (field.xPercent / 100) * targetWidth;
-        const boxY = (field.yPercent / 100) * targetHeight;
-        const boxWidth = (field.widthPercent / 100) * targetWidth;
+        const boxX = (field.xPercent / 100) * exportWidth;
+        const centerY = (field.yPercent / 100) * exportHeight;
+        const boxWidth = (field.widthPercent / 100) * exportWidth;
 
-        let fontSize = field.fontSize * scale;
+        // Apply exact proportional font sizing
+        let fontSize = field.fontSize * canvasScale;
         const cssFontFamily =
           field.fontFamily === 'TimesRoman'
             ? "'Times New Roman', Times, serif"
@@ -243,12 +268,13 @@ export async function generateSingleCertificatePng(
         const fontStyle = `${field.isItalic ? 'italic ' : ''}${field.isBold ? 'bold ' : ''}${fontSize}px ${cssFontFamily}`;
         ctx.font = fontStyle;
         ctx.fillStyle = field.fontColor || '#0f172a';
-        ctx.textBaseline = 'top';
+        // Middle baseline matches CSS transform -translate-y-1/2 on DOM preview exactly
+        ctx.textBaseline = 'middle';
 
         let textWidth = ctx.measureText(text).width;
         if (field.autoScale && textWidth > boxWidth && boxWidth > 10) {
           const fontScale = boxWidth / textWidth;
-          fontSize = Math.max(12, fontSize * fontScale);
+          fontSize = Math.max(8 * canvasScale, fontSize * fontScale);
           ctx.font = `${field.isItalic ? 'italic ' : ''}${field.isBold ? 'bold ' : ''}${fontSize}px ${cssFontFamily}`;
           textWidth = ctx.measureText(text).width;
         }
@@ -264,16 +290,32 @@ export async function generateSingleCertificatePng(
           ctx.textAlign = 'left';
         }
 
-        ctx.fillText(text, drawX, boxY);
+        ctx.fillText(text, drawX, centerY);
       });
 
       canvas.toBlob((blob) => {
+        // Explicitly clean up canvas dimensions to free GPU memory
+        canvas.width = 0;
+        canvas.height = 0;
         if (blob) resolve(blob);
         else reject(new Error('Failed to generate PNG blob'));
       }, 'image/png');
     };
     img.onerror = (e) => reject(new Error('Failed to load template image: ' + e));
     img.src = template.dataUrl;
+  });
+}
+
+// Convert Blob to Base64 String for API attachments
+export function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const base64 = (reader.result as string).split(',')[1];
+      resolve(base64);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
   });
 }
 
@@ -318,7 +360,7 @@ export function generateCertificateFileName(
   return `${base}.${extension}`;
 }
 
-// Create Bulk ZIP containing all generated certificate PDFs
+// Create Bulk ZIP containing all generated certificate PDFs with memory-friendly chunking
 export async function createCertificatesZip(
   certificates: { fileName: string; blob: Blob }[],
   onProgress?: (percent: number, current: number, total: number) => void
@@ -331,6 +373,8 @@ export async function createCertificatesZip(
     zip.file(item.fileName, item.blob);
     if (onProgress && i % 5 === 0) {
       onProgress(Math.round(((i + 1) / total) * 50), i + 1, total);
+      // Yield to event loop to avoid locking thread
+      await new Promise((r) => setTimeout(r, 0));
     }
   }
 
@@ -349,7 +393,7 @@ export async function createCertificatesZip(
   );
 }
 
-// Utility to trigger browser file download
+// Utility to trigger browser file download with immediate URL cleanup
 export function downloadBlob(blob: Blob, fileName: string) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -358,5 +402,5 @@ export function downloadBlob(blob: Blob, fileName: string) {
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  setTimeout(() => URL.revokeObjectURL(url), 1500);
 }

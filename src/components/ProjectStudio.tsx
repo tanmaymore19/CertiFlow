@@ -50,7 +50,7 @@ export const ProjectStudio: React.FC<ProjectStudioProps> = ({
     if (initialProject.recipients && initialProject.recipients.length > 0) {
       return Object.keys(initialProject.recipients[0].data);
     }
-    return ['Full Name', 'Certificate ID', 'Course Name', 'Organization Name', 'Issue Date', 'Designation'];
+    return ['Full Name', 'Email', 'Certificate ID', 'Course Name', 'Organization Name', 'Issue Date', 'Designation'];
   });
   const [isSaving, setIsSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
@@ -386,6 +386,7 @@ export const ProjectStudio: React.FC<ProjectStudioProps> = ({
                 projectName={projectName}
                 projectId={initialProject.id}
                 onGenerationComplete={handleGenerationComplete}
+                onUpdateRecipients={setRecipients}
               />
             ) : (
               <div className="p-12 text-center bg-white rounded-2xl border border-slate-200">

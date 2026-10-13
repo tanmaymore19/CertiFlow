@@ -3,7 +3,6 @@ import {
   FileSpreadsheet,
   Upload,
   Download,
-  Plus,
   Trash2,
   Edit3,
   AlertTriangle,
@@ -15,6 +14,9 @@ import {
   X,
   Check,
   Search,
+  SlidersHorizontal,
+  Mail,
+  User,
 } from 'lucide-react';
 import { FieldConfig, RecipientRecord } from '../types/certificate';
 import {
@@ -22,8 +24,11 @@ import {
   suggestColumnMatch,
   validateRecipients,
   downloadSampleCsv,
+  ParsedSpreadsheetResult,
+  isValidEmail,
 } from '../lib/spreadsheet';
 import { SAMPLE_RECIPIENTS_DATA } from '../lib/sampleTemplates';
+import { ColumnMappingModal } from './ColumnMappingModal';
 
 interface RecipientManagerProps {
   fields: FieldConfig[];
@@ -44,9 +49,15 @@ export const RecipientManager: React.FC<RecipientManagerProps> = ({
 }) => {
   const [isUploading, setIsUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [filterMode, setFilterMode] = useState<'all' | 'errors' | 'valid'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Column Mapping Modal State
+  const [isMappingModalOpen, setIsMappingModalOpen] = useState(false);
+  const [pendingParseResult, setPendingParseResult] = useState<ParsedSpreadsheetResult | null>(null);
+  const [uploadedFileName, setUploadedFileName] = useState('');
 
   // Manual Add / Edit Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -55,13 +66,10 @@ export const RecipientManager: React.FC<RecipientManagerProps> = ({
   const [formErrors, setFormErrors] = useState<string[]>([]);
   const [modalSuccessMsg, setModalSuccessMsg] = useState<string | null>(null);
 
-  // Compute live validation summary
-  const rawRecords = recipients.map((r) => r.data);
-  const { summary } = validateRecipients(rawRecords, fields);
-
   // Default columns list if none present
   const defaultColumnsList = [
     'Full Name',
+    'Email',
     'Certificate ID',
     'Course Name',
     'Organization Name',
@@ -72,32 +80,75 @@ export const RecipientManager: React.FC<RecipientManagerProps> = ({
 
   const activeColumns = availableColumns.length > 0 ? availableColumns : defaultColumnsList;
 
+  // Compute live validation summary
+  const rawRecords = recipients.map((r) => r.data);
+  const { summary } = validateRecipients(rawRecords, fields, activeColumns);
+
+  // 1. File Upload Handler: Parses fast via ArrayBuffer and opens Column Mapping Modal
   const handleFileUpload = async (file: File) => {
     setIsUploading(true);
     setUploadError(null);
+    setSuccessMessage(null);
+
     try {
-      const { headers, records } = await parseSpreadsheetFile(file);
-      onChangeColumns(headers);
-
-      // Auto-link unmapped fields if headers match
-      const updatedFields = fields.map((field) => {
-        if (!field.mappedColumn || !headers.includes(field.mappedColumn)) {
-          const suggested = suggestColumnMatch(field.label, headers);
-          return { ...field, mappedColumn: suggested };
-        }
-        return field;
-      });
-      onUpdateFields(updatedFields);
-
-      // Validate records against updated fields (Merge with existing or replace)
-      const combinedRaw = [...recipients.map((r) => r.data), ...records];
-      const { validatedRecords } = validateRecipients(combinedRaw, updatedFields);
-      onChangeRecipients(validatedRecords);
+      const parsed = await parseSpreadsheetFile(file);
+      setPendingParseResult(parsed);
+      setUploadedFileName(file.name);
+      setIsMappingModalOpen(true);
     } catch (err: any) {
-      setUploadError(err?.message || 'Failed to read spreadsheet.');
+      console.error('File parsing error:', err);
+      setUploadError(err?.message || 'Failed to read spreadsheet file. Please check format.');
     } finally {
       setIsUploading(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
     }
+  };
+
+  // 2. Confirms Column Mapping from Interactive Dialog
+  const handleConfirmMapping = (
+    updatedFields: FieldConfig[],
+    selectedImportColumns: string[]
+  ) => {
+    if (!pendingParseResult) return;
+
+    onUpdateFields(updatedFields);
+    onChangeColumns(selectedImportColumns);
+
+    // Validate records against updated fields & selected columns
+    const { validatedRecords, summary: newSummary } = validateRecipients(
+      pendingParseResult.records,
+      updatedFields,
+      selectedImportColumns
+    );
+
+    onChangeRecipients(validatedRecords);
+    setIsMappingModalOpen(false);
+
+    setSuccessMessage(
+      `Successfully imported ${validatedRecords.length} recipients (${newSummary.valid} ready to generate) from "${uploadedFileName}".`
+    );
+    setTimeout(() => setSuccessMessage(null), 5000);
+  };
+
+  // 3. Open Re-mapping Dialog for existing columns
+  const handleOpenRemapDialog = () => {
+    if (activeColumns.length === 0) return;
+
+    // Build synthetic preview rows from existing recipients
+    const previewRows = recipients.slice(0, 5).map((r) => r.data);
+
+    setPendingParseResult({
+      sheetName: 'Active Roster',
+      allSheetNames: ['Active Roster'],
+      headers: activeColumns,
+      records: recipients.map((r) => r.data),
+      totalRows: recipients.length,
+      previewRows: previewRows.length > 0 ? previewRows : [{}],
+    });
+    setUploadedFileName('Current Roster');
+    setIsMappingModalOpen(true);
   };
 
   const handleLoadSampleData = () => {
@@ -110,26 +161,62 @@ export const RecipientManager: React.FC<RecipientManagerProps> = ({
     });
     onUpdateFields(updatedFields);
 
-    const { validatedRecords } = validateRecipients(SAMPLE_RECIPIENTS_DATA, updatedFields);
+    const { validatedRecords } = validateRecipients(SAMPLE_RECIPIENTS_DATA, updatedFields, headers);
     onChangeRecipients(validatedRecords);
+    setSuccessMessage('Loaded 5 sample recipients with automatic column mapping.');
+    setTimeout(() => setSuccessMessage(null), 3000);
   };
+
+  const handleClearRoster = () => {
+    if (recipients.length === 0) return;
+    if (window.confirm('Are you sure you want to clear all recipients from the roster?')) {
+      onChangeRecipients([]);
+      setSuccessMessage('Roster cleared.');
+      setTimeout(() => setSuccessMessage(null), 2000);
+    }
+  };
+
+  // Helper column resolvers for active roster
+  const getNameColumn = () =>
+    activeColumns.find((c) => /^(full\s*name|name|student\s*name|candidate|participant|recipient)$/i.test(c)) ||
+    activeColumns.find((c) => /name/i.test(c)) ||
+    'Full Name';
+
+  const getEmailColumn = () =>
+    activeColumns.find((c) => /^(email|e-mail|email\s*address|mail)$/i.test(c)) ||
+    activeColumns.find((c) => /email|mail/i.test(c)) ||
+    'Email';
+
+  const getIdColumn = () =>
+    activeColumns.find((c) => /^(certificate\s*id|cert\s*id|cert_id|id|roll\s*no|registration)$/i.test(c)) ||
+    activeColumns.find((c) => /id/i.test(c)) ||
+    'Certificate ID';
 
   // Open Manual Entry Modal
   const handleOpenAddModal = () => {
     if (availableColumns.length === 0) {
       onChangeColumns(defaultColumnsList);
     }
-    const initialForm: Record<string, string> = {};
+    const nameCol = getNameColumn();
+    const emailCol = getEmailColumn();
+
+    const initialForm: Record<string, string> = {
+      [nameCol]: '',
+      [emailCol]: '',
+    };
+
     activeColumns.forEach((col) => {
       if (col.toLowerCase().includes('date')) {
         initialForm[col] = '10 Oct 2026';
-      } else {
+      } else if (initialForm[col] === undefined) {
         initialForm[col] = '';
       }
     });
+
     setFormData(initialForm);
     setFormErrors([]);
     setEditingRecipientIndex(null);
+    setModalSuccessMsg(null);
     setIsModalOpen(true);
   };
 
@@ -137,33 +224,55 @@ export const RecipientManager: React.FC<RecipientManagerProps> = ({
   const handleOpenEditModal = (index: number) => {
     const target = recipients[index];
     if (!target) return;
-    setFormData({ ...target.data });
+    const emailCol = getEmailColumn();
+    const currentData: Record<string, string> = { ...target.data };
+
+    // Synchronize email from recipient object if not explicitly in data
+    if (!currentData[emailCol] && target.email) {
+      currentData[emailCol] = target.email;
+    }
+
+    setFormData(currentData);
     setFormErrors([]);
     setEditingRecipientIndex(index);
+    setModalSuccessMsg(null);
     setIsModalOpen(true);
   };
 
-  // Form Field Change
   const handleFormInputChange = (key: string, value: string) => {
     setFormData((prev) => ({ ...prev, [key]: value }));
   };
 
   // Save Recipient from Modal
   const handleSaveModalRecipient = (addAnother = false) => {
-    // Basic validation
     const errors: string[] = [];
-    const nameKey = activeColumns.find((c) => c.toLowerCase().includes('name')) || activeColumns[0];
-    const idKey = activeColumns.find((c) => c.toLowerCase().includes('id')) || activeColumns[1];
+    const nameCol = getNameColumn();
+    const emailCol = getEmailColumn();
+    const idCol = getIdColumn();
 
-    if (!formData[nameKey] || !formData[nameKey].trim()) {
-      errors.push(`Recipient Name ("${nameKey}") is required.`);
+    const nameVal = (formData[nameCol] || '').trim();
+    const emailVal = (
+      formData[emailCol] ||
+      formData['Email'] ||
+      formData['Email Address'] ||
+      formData['email'] ||
+      ''
+    ).trim();
+
+    if (!nameVal) {
+      errors.push(`Full Name ("${nameCol}") is required.`);
     }
 
-    // Check duplicate ID if ID provided
-    if (idKey && formData[idKey] && formData[idKey].trim()) {
-      const currentId = formData[idKey].trim();
+    if (!emailVal) {
+      errors.push('Email Address is required for automated certificate delivery.');
+    } else if (!isValidEmail(emailVal)) {
+      errors.push(`Invalid email format ("${emailVal}"). Please enter a valid address like name@example.com.`);
+    }
+
+    if (idCol && formData[idCol] && formData[idCol].trim()) {
+      const currentId = formData[idCol].trim();
       const existingDup = recipients.some(
-        (r, idx) => idx !== editingRecipientIndex && (r.data[idKey] || '').trim() === currentId
+        (r, idx) => idx !== editingRecipientIndex && (r.data[idCol] || '').trim() === currentId
       );
       if (existingDup) {
         errors.push(`Certificate ID "${currentId}" is already used by another recipient.`);
@@ -175,37 +284,59 @@ export const RecipientManager: React.FC<RecipientManagerProps> = ({
       return;
     }
 
-    let updatedRaw: Record<string, string>[] = [];
-    if (editingRecipientIndex !== null) {
-      // Update existing
-      updatedRaw = recipients.map((r, idx) =>
-        idx === editingRecipientIndex ? { ...formData } : r.data
-      );
-    } else {
-      // Add new recipient
-      updatedRaw = [...recipients.map((r) => r.data), { ...formData }];
+    // Ensure email column exists in activeColumns so it populates the table headers
+    let updatedColumns = [...activeColumns];
+    if (!updatedColumns.some((c) => /email|mail/i.test(c))) {
+      const nameIndex = updatedColumns.findIndex((c) => /name|candidate|student/i.test(c));
+      if (nameIndex >= 0) {
+        updatedColumns.splice(nameIndex + 1, 0, 'Email');
+      } else {
+        updatedColumns.unshift('Email');
+      }
+      onChangeColumns(updatedColumns);
     }
 
-    const { validatedRecords } = validateRecipients(updatedRaw, fields);
+    const payloadData: Record<string, string> = {
+      ...formData,
+      [nameCol]: nameVal,
+      [emailCol]: emailVal,
+    };
+    if (emailCol !== 'Email' && !payloadData['Email']) {
+      payloadData['Email'] = emailVal;
+    }
+
+    let updatedRaw: Record<string, string>[] = [];
+    if (editingRecipientIndex !== null) {
+      updatedRaw = recipients.map((r, idx) =>
+        idx === editingRecipientIndex ? payloadData : r.data
+      );
+    } else {
+      updatedRaw = [...recipients.map((r) => r.data), payloadData];
+    }
+
+    const { validatedRecords } = validateRecipients(updatedRaw, fields, updatedColumns);
     onChangeRecipients(validatedRecords);
 
     if (addAnother) {
-      // Reset form for next entry
-      const resetForm: Record<string, string> = {};
-      activeColumns.forEach((col) => {
+      const resetForm: Record<string, string> = {
+        [nameCol]: '',
+        [emailCol]: '',
+      };
+      updatedColumns.forEach((col) => {
         if (col.toLowerCase().includes('date')) resetForm[col] = '10 Oct 2026';
-        else resetForm[col] = '';
+        else if (resetForm[col] === undefined) resetForm[col] = '';
       });
       setFormData(resetForm);
       setEditingRecipientIndex(null);
       setFormErrors([]);
-      setModalSuccessMsg('Recipient saved! Ready for next entry.');
-      setTimeout(() => setModalSuccessMsg(null), 2500);
+      setModalSuccessMsg(`"${nameVal}" saved successfully! Ready for the next recipient.`);
+      setTimeout(() => setModalSuccessMsg(null), 3000);
     } else {
       setIsModalOpen(false);
     }
   };
 
+  // Direct Inline Cell Editing in the Roster Table
   const handleCellChange = (rowIndex: number, column: string, value: string) => {
     const updated = [...recipients];
     const target = updated[rowIndex];
@@ -217,13 +348,13 @@ export const RecipientManager: React.FC<RecipientManagerProps> = ({
     };
 
     const allRaw = updated.map((r) => r.data);
-    const { validatedRecords } = validateRecipients(allRaw, fields);
+    const { validatedRecords } = validateRecipients(allRaw, fields, activeColumns);
     onChangeRecipients(validatedRecords);
   };
 
   const handleDeleteRow = (index: number) => {
     const updatedRaw = recipients.filter((_, idx) => idx !== index).map((r) => r.data);
-    const { validatedRecords } = validateRecipients(updatedRaw, fields);
+    const { validatedRecords } = validateRecipients(updatedRaw, fields, activeColumns);
     onChangeRecipients(validatedRecords);
   };
 
@@ -233,7 +364,8 @@ export const RecipientManager: React.FC<RecipientManagerProps> = ({
 
     const { validatedRecords } = validateRecipients(
       recipients.map((r) => r.data),
-      updatedFields
+      updatedFields,
+      activeColumns
     );
     onChangeRecipients(validatedRecords);
   };
@@ -251,16 +383,16 @@ export const RecipientManager: React.FC<RecipientManagerProps> = ({
 
   return (
     <div className="space-y-6">
-      {/* Top Action Header with Option A & Option B */}
+      {/* Top Action Header */}
       <div className="p-5 bg-white rounded-2xl border border-slate-200 shadow-xs space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <h4 className="text-base font-bold text-slate-900 flex items-center space-x-2">
               <FileSpreadsheet className="w-5 h-5 text-indigo-600" />
-              <span>Recipient Roster Management</span>
+              <span>Recipient Roster & Data Import Pipeline</span>
             </h4>
             <p className="text-xs text-slate-500 mt-0.5">
-              Add recipients via bulk Excel/CSV import or manual entry form. Both methods can be combined freely.
+              Upload spreadsheets (.xlsx, .xls, .csv), map custom column headers, and review individual entries.
             </p>
           </div>
 
@@ -277,60 +409,92 @@ export const RecipientManager: React.FC<RecipientManagerProps> = ({
               }}
             />
 
-            {/* Option A: Upload File */}
+            {/* Upload Spreadsheet Button */}
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
               disabled={isUploading}
-              className="inline-flex items-center space-x-1.5 px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold shadow-xs transition"
+              className="inline-flex items-center space-x-1.5 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold shadow-xs transition"
             >
               {isUploading ? (
                 <RefreshCw className="w-3.5 h-3.5 animate-spin" />
               ) : (
                 <Upload className="w-3.5 h-3.5" />
               )}
-              <span>Upload Excel / CSV</span>
+              <span>{isUploading ? 'Parsing File...' : 'Upload Excel / CSV'}</span>
             </button>
 
-            {/* Option B: Enter Details Manually */}
+            {/* Interactive Column Mapping Dialog Button */}
+            {recipients.length > 0 && (
+              <button
+                type="button"
+                onClick={handleOpenRemapDialog}
+                className="inline-flex items-center space-x-1.5 px-3.5 py-2.5 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-xs font-semibold transition"
+              >
+                <SlidersHorizontal className="w-3.5 h-3.5" />
+                <span>Map Columns</span>
+              </button>
+            )}
+
+            {/* Enter Manually */}
             <button
               type="button"
               onClick={handleOpenAddModal}
-              className="inline-flex items-center space-x-1.5 px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-xs transition"
+              className="inline-flex items-center space-x-1.5 px-3.5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-xs transition"
             >
               <UserPlus className="w-3.5 h-3.5" />
-              <span>+ Enter Manually</span>
+              <span>+ Add Entry</span>
             </button>
 
             <button
               type="button"
               onClick={handleLoadSampleData}
-              className="inline-flex items-center space-x-1.5 px-3 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-xs font-medium transition"
+              className="inline-flex items-center space-x-1.5 px-3 py-2.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-xs font-medium transition"
             >
               <Sparkles className="w-3.5 h-3.5 text-amber-600" />
-              <span>Load 5 Demo Records</span>
+              <span>Load 5 Demo</span>
             </button>
 
             <button
               type="button"
               onClick={downloadSampleCsv}
-              className="inline-flex items-center space-x-1.5 px-3 py-2 rounded-xl bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 text-xs font-medium transition"
+              className="inline-flex items-center space-x-1.5 px-3 py-2.5 rounded-xl bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 text-xs font-medium transition"
             >
               <Download className="w-3.5 h-3.5" />
               <span>Sample CSV</span>
             </button>
+
+            {recipients.length > 0 && (
+              <button
+                type="button"
+                onClick={handleClearRoster}
+                className="inline-flex items-center space-x-1 px-3 py-2.5 rounded-xl text-rose-600 hover:bg-rose-50 text-xs font-medium transition"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Clear</span>
+              </button>
+            )}
           </div>
         </div>
       </div>
 
+      {/* Success Notification Banner */}
+      {successMessage && (
+        <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs flex items-center space-x-2 animate-in fade-in duration-200">
+          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+          <span className="font-semibold">{successMessage}</span>
+        </div>
+      )}
+
+      {/* Upload Error Alert */}
       {uploadError && (
         <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-center space-x-2">
-          <AlertTriangle className="w-4 h-4 shrink-0" />
+          <AlertTriangle className="w-4 h-4 shrink-0 text-rose-600" />
           <span>{uploadError}</span>
         </div>
       )}
 
-      {/* Field Mapping Drawer */}
+      {/* Quick Column Mapping Bar */}
       <div className="p-4 bg-white rounded-2xl border border-slate-200 shadow-xs space-y-3">
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-2">
@@ -339,9 +503,14 @@ export const RecipientManager: React.FC<RecipientManagerProps> = ({
               Certificate Fields Column Mapping
             </h5>
           </div>
-          <span className="text-[11px] text-slate-500">
-            Link each certificate dynamic field to a roster column
-          </span>
+          <button
+            type="button"
+            onClick={handleOpenRemapDialog}
+            className="text-[11px] text-indigo-600 font-semibold hover:underline flex items-center space-x-1"
+          >
+            <span>Open Advanced Mapping Modal</span>
+            <SlidersHorizontal className="w-3 h-3" />
+          </button>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
@@ -402,8 +571,8 @@ export const RecipientManager: React.FC<RecipientManagerProps> = ({
             <div>
               <p className="font-bold text-sm">
                 {summary.invalid === 0
-                  ? `All ${summary.total} Recipients Validated Successfully!`
-                  : `Attention Required: ${summary.invalid} record(s) contain validation issues`}
+                  ? `${summary.total} total rows detected • ${summary.valid} valid records ready to generate!`
+                  : `Review Needed: ${summary.invalid} record(s) contain validation issues (${summary.valid} ready)`}
               </p>
               <div className="flex flex-wrap items-center gap-3 mt-1 text-[11px] opacity-90">
                 <span>Total: {summary.total}</span>
@@ -422,6 +591,14 @@ export const RecipientManager: React.FC<RecipientManagerProps> = ({
                     <span>•</span>
                     <span className="text-rose-600 font-semibold">
                       Duplicate IDs: {summary.duplicateIds}
+                    </span>
+                  </>
+                )}
+                {summary.missingEmails > 0 && (
+                  <>
+                    <span>•</span>
+                    <span className="text-amber-700 font-semibold">
+                      Missing Emails: {summary.missingEmails}
                     </span>
                   </>
                 )}
@@ -454,45 +631,58 @@ export const RecipientManager: React.FC<RecipientManagerProps> = ({
               </button>
               <button
                 type="button"
-                onClick={() => setFilterMode('errors')}
+                onClick={() => setFilterMode('valid')}
                 className={`px-2.5 py-1 rounded-lg font-medium transition ${
-                  filterMode === 'errors' ? 'bg-rose-600 text-white' : 'text-slate-600 hover:bg-slate-100'
+                  filterMode === 'valid' ? 'bg-emerald-600 text-white' : 'text-slate-600 hover:bg-slate-100'
                 }`}
               >
-                Errors ({summary.invalid})
+                Valid ({summary.valid})
               </button>
+              {summary.invalid > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setFilterMode('errors')}
+                  className={`px-2.5 py-1 rounded-lg font-medium transition ${
+                    filterMode === 'errors' ? 'bg-rose-600 text-white' : 'text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  Errors ({summary.invalid})
+                </button>
+              )}
             </div>
           </div>
         </div>
       )}
 
-      {/* Recipient Editable Table */}
+      {/* Recipient Editable Table with Direct Inline Editing */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
         <div className="p-3.5 border-b border-slate-100 flex items-center justify-between">
           <div className="flex items-center space-x-2">
             <span className="text-xs font-bold text-slate-800 uppercase tracking-wider">
               Unified Recipient Roster ({recipients.length})
             </span>
-            <span className="text-xs text-slate-400">• Click cells to edit</span>
+            <span className="text-xs text-slate-400">• Double-click or type directly in any cell to edit</span>
           </div>
 
-          <button
-            type="button"
-            onClick={handleOpenAddModal}
-            className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-lg bg-indigo-50 text-indigo-700 hover:bg-indigo-100 text-xs font-semibold transition"
-          >
-            <UserPlus className="w-3.5 h-3.5" />
-            <span>Add Recipient</span>
-          </button>
+          <div className="flex items-center space-x-2">
+            <button
+              type="button"
+              onClick={handleOpenAddModal}
+              className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-lg bg-indigo-50 text-indigo-700 hover:bg-indigo-100 text-xs font-semibold transition"
+            >
+              <UserPlus className="w-3.5 h-3.5" />
+              <span>Add Recipient</span>
+            </button>
+          </div>
         </div>
 
         {recipients.length === 0 ? (
           <div className="p-12 text-center text-slate-500 text-xs space-y-3">
             <FileSpreadsheet className="w-10 h-10 mx-auto text-slate-300" />
             <div>
-              <p className="font-semibold text-slate-700 text-sm">No recipients added yet</p>
+              <p className="font-semibold text-slate-700 text-sm">No recipients loaded yet</p>
               <p className="mt-1 text-slate-500">
-                Upload a spreadsheet (.xlsx / .csv) or click &quot;+ Enter Manually&quot; above.
+                Upload a spreadsheet (.xlsx / .csv) or click &quot;+ Add Entry&quot; above.
               </p>
             </div>
             <div className="flex justify-center space-x-2 pt-2">
@@ -508,7 +698,7 @@ export const RecipientManager: React.FC<RecipientManagerProps> = ({
                 onClick={handleOpenAddModal}
                 className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-semibold shadow-xs"
               >
-                Enter Details Manually
+                Enter Manually
               </button>
             </div>
           </div>
@@ -557,12 +747,13 @@ export const RecipientManager: React.FC<RecipientManagerProps> = ({
                         )}
                       </td>
                       {activeColumns.map((col) => (
-                        <td key={col} className="py-1.5 px-2">
+                        <td key={col} className="py-1 px-2">
                           <input
                             type="text"
                             value={recipient.data[col] || ''}
                             onChange={(e) => handleCellChange(actualIndex, col, e.target.value)}
-                            className="w-full px-2 py-1 rounded border border-transparent hover:border-slate-300 focus:border-indigo-500 focus:bg-white text-xs bg-transparent transition"
+                            className="w-full px-2 py-1.5 rounded-lg border border-transparent hover:border-slate-300 focus:border-indigo-500 focus:bg-white text-xs bg-transparent transition font-medium text-slate-800"
+                            placeholder="Click to type..."
                           />
                         </td>
                       ))}
@@ -572,7 +763,7 @@ export const RecipientManager: React.FC<RecipientManagerProps> = ({
                             type="button"
                             onClick={() => handleOpenEditModal(actualIndex)}
                             className="p-1 rounded text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 transition"
-                            title="Edit in form"
+                            title="Edit details in modal form"
                           >
                             <Edit3 className="w-3.5 h-3.5" />
                           </button>
@@ -596,7 +787,22 @@ export const RecipientManager: React.FC<RecipientManagerProps> = ({
         )}
       </div>
 
-      {/* Manual Add / Edit Recipient Modal (Option B) */}
+      {/* Interactive Column Mapping Dialog */}
+      {pendingParseResult && (
+        <ColumnMappingModal
+          isOpen={isMappingModalOpen}
+          fileName={uploadedFileName}
+          sheetName={pendingParseResult.sheetName}
+          detectedHeaders={pendingParseResult.headers}
+          previewRows={pendingParseResult.previewRows}
+          totalRows={pendingParseResult.totalRows}
+          fields={fields}
+          onConfirm={handleConfirmMapping}
+          onClose={() => setIsMappingModalOpen(false)}
+        />
+      )}
+
+      {/* Manual Add / Edit Recipient Modal */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-xl w-full p-6 space-y-5 animate-in fade-in zoom-in-95 duration-150">
@@ -639,23 +845,100 @@ export const RecipientManager: React.FC<RecipientManagerProps> = ({
 
             {/* Form Fields */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-h-[380px] overflow-y-auto pr-1 text-xs">
-              {activeColumns.map((col) => {
-                const isRequired = col.toLowerCase().includes('name') || col.toLowerCase().includes('id');
-                return (
-                  <div key={col} className="space-y-1">
-                    <label className="font-semibold text-slate-700 block">
-                      {col} {isRequired && <span className="text-rose-500">*</span>}
-                    </label>
-                    <input
-                      type="text"
-                      value={formData[col] || ''}
-                      onChange={(e) => handleFormInputChange(col, e.target.value)}
-                      placeholder={`Enter ${col.toLowerCase()}...`}
-                      className="w-full px-3 py-2 rounded-xl border border-slate-300 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 font-medium"
-                    />
-                  </div>
-                );
-              })}
+              {/* 1. Full Name (Required) */}
+              <div className="space-y-1">
+                <label className="font-semibold text-slate-700 flex items-center justify-between">
+                  <span className="flex items-center space-x-1">
+                    <span>Full Name</span>
+                    <span className="text-rose-500 font-bold">*</span>
+                  </span>
+                  <span className="text-[10px] text-slate-400 font-normal">Primary Recipient</span>
+                </label>
+                <div className="relative">
+                  <User className="w-4 h-4 text-slate-400 absolute left-3 top-2.5 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={formData[getNameColumn()] || ''}
+                    onChange={(e) => handleFormInputChange(getNameColumn(), e.target.value)}
+                    placeholder="e.g. Alexander Hamilton"
+                    className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-300 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 font-medium text-slate-800 placeholder:text-slate-400 transition"
+                  />
+                </div>
+              </div>
+
+              {/* 2. Email Address (Required for Distribution) */}
+              <div className="space-y-1">
+                <label className="font-semibold text-slate-700 flex items-center justify-between">
+                  <span className="flex items-center space-x-1">
+                    <span>Email Address</span>
+                    <span className="text-rose-500 font-bold">*</span>
+                  </span>
+                  <span className="text-[10px] text-indigo-600 font-semibold">For Auto Delivery</span>
+                </label>
+                <div className="relative">
+                  <Mail className="w-4 h-4 text-slate-400 absolute left-3 top-2.5 pointer-events-none" />
+                  <input
+                    type="email"
+                    value={
+                      formData[getEmailColumn()] !== undefined
+                        ? formData[getEmailColumn()]
+                        : formData['Email'] || formData['Email Address'] || ''
+                    }
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      handleFormInputChange(getEmailColumn(), val);
+                      if (getEmailColumn() !== 'Email') {
+                        handleFormInputChange('Email', val);
+                      }
+                    }}
+                    placeholder="name@example.com"
+                    className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-300 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 font-medium text-slate-800 placeholder:text-slate-400 transition"
+                  />
+                </div>
+              </div>
+
+              {/* 3. Additional Columns from Roster / Template */}
+              {activeColumns
+                .filter(
+                  (col) =>
+                    col !== getNameColumn() &&
+                    col !== getEmailColumn() &&
+                    !/^(email|e-mail|email\s*address|mail)$/i.test(col) &&
+                    !/^(full\s*name|name|student\s*name|candidate|participant|recipient)$/i.test(col)
+                )
+                .map((col) => {
+                  const isId = /id|cert|registration|roll/i.test(col);
+                  const isDate = /date/i.test(col);
+                  const placeholder = isId
+                    ? 'e.g. CERT-2026-001'
+                    : isDate
+                    ? 'e.g. 10 Oct 2026'
+                    : /course/i.test(col)
+                    ? 'e.g. Full Stack Web Development'
+                    : /org/i.test(col)
+                    ? 'e.g. Tech Excellence Academy'
+                    : /desig|role/i.test(col)
+                    ? 'e.g. Software Engineer'
+                    : `Enter ${col.toLowerCase()}...`;
+
+                  return (
+                    <div key={col} className="space-y-1">
+                      <label className="font-semibold text-slate-700 flex items-center justify-between">
+                        <span>{col}</span>
+                        {isId && (
+                          <span className="text-[10px] text-slate-400 font-normal">Unique ID</span>
+                        )}
+                      </label>
+                      <input
+                        type="text"
+                        value={formData[col] || ''}
+                        onChange={(e) => handleFormInputChange(col, e.target.value)}
+                        placeholder={placeholder}
+                        className="w-full px-3 py-2 rounded-xl border border-slate-300 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 font-medium text-slate-800 placeholder:text-slate-400 transition"
+                      />
+                    </div>
+                  );
+                })}
             </div>
 
             {/* Modal Actions */}
@@ -663,8 +946,17 @@ export const RecipientManager: React.FC<RecipientManagerProps> = ({
               <button
                 type="button"
                 onClick={() => {
-                  const reset: Record<string, string> = {};
-                  activeColumns.forEach((c) => (reset[c] = ''));
+                  const nameCol = getNameColumn();
+                  const emailCol = getEmailColumn();
+                  const reset: Record<string, string> = {
+                    [nameCol]: '',
+                    [emailCol]: '',
+                    Email: '',
+                  };
+                  activeColumns.forEach((c) => {
+                    if (c.toLowerCase().includes('date')) reset[c] = '10 Oct 2026';
+                    else reset[c] = '';
+                  });
                   setFormData(reset);
                   setFormErrors([]);
                 }}
@@ -695,7 +987,7 @@ export const RecipientManager: React.FC<RecipientManagerProps> = ({
                 <button
                   type="button"
                   onClick={() => handleSaveModalRecipient(false)}
-                  className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold transition shadow-md shadow-indigo-500/20"
+                  className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold transition shadow-md shadow-indigo-500/20"
                 >
                   {editingRecipientIndex !== null ? 'Save Changes' : 'Save Recipient'}
                 </button>

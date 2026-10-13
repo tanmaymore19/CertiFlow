@@ -152,6 +152,7 @@ export const VisualEditor: React.FC<VisualEditorProps> = ({
       issue_date: { label: 'Issue Date', sample: '10 Oct 2026', size: 14, bold: false },
       completion_date: { label: 'Completion Date', sample: '10 Oct 2026', size: 14, bold: false },
       designation: { label: 'Designation / Role', sample: 'Software Engineer', size: 16, bold: false },
+      email: { label: 'Recipient Email', sample: 'recipient@example.com', size: 14, bold: false },
       custom: { label: 'Custom Text Field', sample: 'Distinction with Honors', size: 18, bold: false },
     };
 
@@ -653,6 +654,14 @@ export const VisualEditor: React.FC<VisualEditorProps> = ({
             >
               <Plus className="w-3.5 h-3.5 shrink-0" />
               <span className="truncate">Organization</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleAddField('email')}
+              className="p-2 rounded-lg bg-slate-50 hover:bg-indigo-50 hover:text-indigo-700 border border-slate-200 text-left font-medium flex items-center space-x-1.5 transition"
+            >
+              <Plus className="w-3.5 h-3.5 shrink-0" />
+              <span className="truncate">Recipient Email</span>
             </button>
             <button
               type="button"

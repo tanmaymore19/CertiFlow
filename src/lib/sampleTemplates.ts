@@ -188,7 +188,7 @@ export function getDefaultFieldsForTemplate(): FieldConfig[] {
       mappedColumn: 'Full Name',
       sampleValue: 'Rahul Patil',
       xPercent: 20,
-      yPercent: 36, // positioned right above line y=360 (which is 42% of 850)
+      yPercent: 36, // positioned right above line y=360
       widthPercent: 60,
       fontFamily: 'TimesRoman',
       fontSize: 34,
@@ -206,7 +206,7 @@ export function getDefaultFieldsForTemplate(): FieldConfig[] {
       mappedColumn: 'Course Name',
       sampleValue: 'Full Stack Web Development & Cloud Systems',
       xPercent: 25,
-      yPercent: 54, // positioned right above line y=510 (which is 60% of 850)
+      yPercent: 54, // positioned right above line y=510
       widthPercent: 50,
       fontFamily: 'Helvetica',
       fontSize: 20,
@@ -301,6 +301,7 @@ export const SAMPLE_TEMPLATES: {
 export const SAMPLE_RECIPIENTS_DATA = [
   {
     'Full Name': 'Rahul Patil',
+    'Email': 'rahul.patil@example.com',
     'Certificate ID': 'CERT-001',
     'Course Name': 'Full Stack Web Development & Cloud Systems',
     'Organization Name': 'Apex Tech Institute',
@@ -309,6 +310,7 @@ export const SAMPLE_RECIPIENTS_DATA = [
   },
   {
     'Full Name': 'Priya Sharma',
+    'Email': 'priya.sharma@example.com',
     'Certificate ID': 'CERT-002',
     'Course Name': 'Full Stack Web Development & Cloud Systems',
     'Organization Name': 'Apex Tech Institute',
@@ -317,6 +319,7 @@ export const SAMPLE_RECIPIENTS_DATA = [
   },
   {
     'Full Name': 'Amit Deshmukh',
+    'Email': 'amit.deshmukh@example.com',
     'Certificate ID': 'CERT-003',
     'Course Name': 'Full Stack Web Development & Cloud Systems',
     'Organization Name': 'Apex Tech Institute',
@@ -325,6 +328,7 @@ export const SAMPLE_RECIPIENTS_DATA = [
   },
   {
     'Full Name': 'Sarah Jenkins',
+    'Email': 'sarah.jenkins@example.com',
     'Certificate ID': 'CERT-004',
     'Course Name': 'Full Stack Web Development & Cloud Systems',
     'Organization Name': 'Apex Tech Institute',
@@ -333,6 +337,7 @@ export const SAMPLE_RECIPIENTS_DATA = [
   },
   {
     'Full Name': 'David Chen',
+    'Email': 'david.chen@example.com',
     'Certificate ID': 'CERT-005',
     'Course Name': 'Full Stack Web Development & Cloud Systems',
     'Organization Name': 'Apex Tech Institute',
